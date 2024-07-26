@@ -1,0 +1,63 @@
+#+OPTIONS: ^:nil tags:nil num:nil
+
+* About
+
+Transient menu for the Python =pip= package installer.
+
+* Table of Contents                                       :TOC_2_gh:QUOTE:
+#+BEGIN_QUOTE
+- [[#about][About]]
+- [[#requirements][Requirements]]
+- [[#installation][Installation]]
+  - [[#with-use-package-and-straightel][With use-package and straight.el]]
+  - [[#manual-installation][Manual installation]]
+- [[#usage][Usage]]
+  - [[#transient][Transient]]
+#+END_QUOTE
+
+* Requirements
+
+| Name        | Version |
+|-------------+---------|
+| Emacs       |    29.1 |
+| ~transient~ |   0.7.2 |
+| ~pyvenv~    |    1.21 |
+| ~project~   |  0.11.1 |
+
+
+* Installation
+
+** With use-package and straight.el
+#+begin_src elisp :eval no
+(use-package pip-menu
+  :straight (pip-menu
+             :repo "KarimAziev/pip-menu"
+             :type git
+             :host github)
+  :commands (pip-menu
+             pip-menu-pyvenv))
+#+end_src
+
+** Manual installation
+
+Download the source code and put it wherever you like, e.g. into =~/.emacs.d/pip-menu/=
+
+#+begin_src shell :eval no
+git clone https://github.com/KarimAziev/pip-menu.git ~/.emacs.d/pip-menu/
+#+end_src
+
+Add the downloaded directory to the load path:
+
+#+begin_src elisp :eval no
+(add-to-list 'load-path "~/.emacs.d/pip-menu/")
+(require 'pip-menu)
+#+end_src
+
+* Usage
+
+** Transient
+
+**** ~pip-menu~
+Manage dependencies with pip.
+**** ~pip-menu-pyvenv~
+A transient prefix for managing Python virtual environments with ~pyvenv~.
