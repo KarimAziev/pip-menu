@@ -346,7 +346,7 @@ vector, list, cons cell, symbol, or any other type."
     (_ item)))
 
 (defun pip-menu--get-arguments ()
-  "Retrieve and process arguments for npmjs command."
+  "Retrieve and process arguments for pip command."
   (let ((raw-args))
     (cond (transient-current-command
            (setq raw-args (transient-args transient-current-command)))
@@ -382,7 +382,7 @@ representing a command-line argument."
           (t 0))))
 
 (defun pip-menu--format-args (args)
-  "Format npm arguments by joining lists and substituting hints.
+  "Format pip arguments by joining lists and substituting hints.
 
 Argument ARGS is a list of arguments to be formatted."
   (let ((new-args (mapcar
@@ -409,11 +409,11 @@ Argument STR is a string containing the text to be processed."
     (buffer-string)))
 
 (defun pip-menu--get-formatted-transient-args ()
-  "Format transient arguments for npmjs."
+  "Return current transient arguments."
   (pip-menu--format-args (reverse (pip-menu--get-arguments))))
 
 (transient-define-suffix pip-menu-show-args ()
-  "Display formatted npm command with arguments."
+  "Display formatted pip command with arguments."
   :transient t
   (interactive)
   (let ((name (get transient-current-command 'pip-menu-command))
@@ -834,7 +834,7 @@ Remaining arguments _ are ignored."
     (cons used-keys (nreverse commands))))
 
 (defun pip-menu--eval-infix (name &optional args inhibit-eval)
-  "Evaluate or define transient infix for npmjs commands.
+  "Evaluate or define transient infix for pip commands.
 
 Argument NAME is a symbol representing the name of the infix command.
 
