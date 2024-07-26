@@ -497,7 +497,6 @@ Remaining arguments BODY are the forms to be included in the command definition.
                             (pip-menu--get-project-buffer-name))))
             ("C-c C-a" "Show arguments" pip-menu-show-args)]]
           (interactive (list (pip-menu--get-arguments)))
-          (message "`%s'=" ,args)
           (setq ,help-output
            (or ,help-output (pip-menu--parse-help-with-output
                                 (pip-menu--trim-warning
