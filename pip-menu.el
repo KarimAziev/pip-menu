@@ -330,8 +330,6 @@ Optional argument ENV is the environment to use during compilation."
          (compile-command command)
          (compilation-save-buffers-predicate
           (lambda ()
-            (message "curr-dir %s default-directory=`%S'" curr-dir
-                     default-directory)
             (when (and curr-dir default-directory)
               (file-in-directory-p default-directory curr-dir))))
          (compilation-buffer-name-function
@@ -468,7 +466,7 @@ Argument PLIST is a property list containing subcommands and their details."
   (let ((res))
     (pcase-dolist (`(,_group-name . ,cmds)
                    (plist-get plist :subcommands))
-      (when-let ((args (mapcar 'caddr cmds)))
+      (when-let ((args (mapcar #'caddr cmds)))
         (push args
               res)))
     res))
