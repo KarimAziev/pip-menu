@@ -2,7 +2,9 @@
 
 * About
 
-Transient menu for the Python =pip= package installer.
+=pip-menu= is an Emacs package that provides a transient menu interface for managing Python packages using =pip=. The package also integrates with =pyvenv= to activate, deactivate, and manage virtual environments.
+
+[[./pip-menu.gif]]
 
 * Table of Contents                                       :TOC_2_gh:QUOTE:
 #+BEGIN_QUOTE
@@ -11,15 +13,14 @@ Transient menu for the Python =pip= package installer.
 - [[#installation][Installation]]
   - [[#with-use-package-and-straightel][With use-package and straight.el]]
   - [[#manual-installation][Manual installation]]
-- [[#usage][Usage]]
-  - [[#transient][Transient]]
+  - [[#usage][Usage]]
 #+END_QUOTE
 
 * Requirements
 
 | Name        | Version |
 |-------------+---------|
-| Emacs       |    29.1 |
+| Emacs       |    27.1 |
 | ~transient~ |   0.7.2 |
 | ~pyvenv~    |    1.21 |
 | ~project~   |  0.11.1 |
@@ -40,7 +41,7 @@ Transient menu for the Python =pip= package installer.
 
 ** Manual installation
 
-Download the source code and put it wherever you like, e.g. into =~/.emacs.d/pip-menu/=
+Download the source code and put it wherever you like, e.g., into =~/.emacs.d/pip-menu/=.
 
 #+begin_src shell :eval no
 git clone https://github.com/KarimAziev/pip-menu.git ~/.emacs.d/pip-menu/
@@ -53,11 +54,38 @@ Add the downloaded directory to the load path:
 (require 'pip-menu)
 #+end_src
 
-* Usage
+** Usage
 
-** Transient
+*** =pip-menu=
 
-**** ~pip-menu~
-Manage dependencies with pip.
-**** ~pip-menu-pyvenv~
-A transient prefix for managing Python virtual environments with ~pyvenv~.
+=pip-menu= is the main entry command for managing Python packages using =pip=.
+
+1. *Invoke =pip-menu=:*
+
+   - =M-x pip-menu=
+
+2. *Menu Options:*
+
+   - The menu provides several =pip= commands like =install=, =uninstall=, =show=, etc.
+   - Select commands or options using the corresponding transient keys.
+   - Execute a command by selecting it and pressing =RET=.
+
+   Commands that involve reading the installed packages (e.g., =pip uninstall= or =pip show=) will prompt you about the packages after executing commands (after pressing =RET=). Multiple packages can be chosen. To stop selecting packages and confirm your choice, invoke =pip-menu-throw-done=, which is by default bound to =C-M-j= and =C-<return>=. You can change the binding by customizing the =pip-menu-multi-completion-map= keymap, e.g.:
+
+#+begin_src elisp
+(define-key pip-menu-multi-completion-map (kbd "C-SPC") #'pip-menu-throw-done)
+#+end_src
+
+
+*** =pip-menu-pyvenv=
+
+=pip-menu-pyvenv= is the entry command for managing Python virtual environments using =pyvenv=.
+
+1. *Invoke =pip-menu-pyvenv=:*
+
+   - =M-x pip-menu-pyvenv=
+
+2. *Menu Options:*
+
+   - The menu provides options to activate, deactivate, and create virtual environments.
+   - Additionally, you can toggle =pyvenv-mode= and =pyvenv-tracking-mode=.
