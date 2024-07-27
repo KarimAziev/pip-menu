@@ -6,7 +6,7 @@
 ;; URL: https://github.com/KarimAziev/pip-menu
 ;; Version: 0.1.0
 ;; Keywords: languages
-;; Package-Requires: ((emacs "29.1") (transient "0.7.2") (pyvenv "1.21") (project "0.11.1"))
+;; Package-Requires: ((emacs "27.1") (transient "0.7.2") (pyvenv "1.21") (project "0.11.1"))
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;; This file is NOT part of GNU Emacs.
@@ -26,7 +26,29 @@
 
 ;;; Commentary:
 
-;; Transient menu for the `pip` package installer
+;; `pip-menu' provides a transient menu interface for managing Python packages
+;; using pip. It also integrates with `pyvenv' to activate, deactivate,
+;; and manage virtual environments.
+
+;; Usage:
+
+;; `pip-menu' is the main entry command for managing Python packages using `pip`.
+
+;;  - Run `M-x pip-menu'.
+;;  - Select commands or options using the corresponding transient keys.
+;;  - Execute a command by selecting it and pressing `RET'.
+
+;; Commands that involve reading the installed packages (e.g., `pip uninstall'
+;; or `pip show') will prompt for package selection after executing commands
+;; (after pressing `RET').
+
+;; Multiple packages can be chosen. To stop selecting packages and confirm your
+;; choice, invoke `pip-menu-throw-done', which is by default bound to `C-M-j'
+;; and `C-<return>'. You can change the binding by customizing the
+;; `pip-menu-multi-completion-map' keymap.
+
+;; `pip-menu-pyvenv' is an additional entry command for managing Python virtual
+;; environments using `pyvenv'.
 
 ;;; Code:
 
@@ -34,6 +56,7 @@
 (require 'project)
 (require 'transient)
 (require 'compile)
+
 
 (declare-function json-read "json")
 
@@ -747,6 +770,7 @@ represent a JSON false value.  It defaults to `:false'."
     map)
   "Keymap for multi-completion commands in pip menu.")
 
+
 (defun pip-menu-throw-done (&optional arg)
   "Throw `done' signal with argument or true.
 
@@ -1323,6 +1347,21 @@ Optional argument USED-KEYS is a list of keys that have already been used."
        :subcommands subcommands
        :options options-groups))))
 
+(defun pip-menu--seq-split (sequence length)
+  "Split SEQUENCE into a list of sub-sequences of at most LENGTH elements.
+All the sub-sequences will be LENGTH long, except the last one,
+which may be shorter."
+  (when (< length 1)
+    (error "Sub-sequence length must be larger than zero"))
+  (let ((result nil)
+        (seq-length (length sequence))
+        (start 0))
+    (while (< start seq-length)
+      (push (seq-subseq sequence start
+                        (setq start (min seq-length (+ start length))))
+            result))
+    (nreverse result)))
+
 (defun pip-menu--key-splitted-variants (word len separator)
   "Generate unique key variants from a word.
 
@@ -1345,7 +1384,8 @@ Argument SEPARATOR is a string used as the delimiter for splitting WORD."
                                 (unless (> slen (length it))
                                   (concat first-letter
                                           (string-join it ""))))
-                              (seq-split splitted slen)))
+                              (pip-menu--seq-split
+                               splitted slen)))
              (list
               (mapconcat (lambda (_) first-letter)
                          (number-sequence 0 slen)
