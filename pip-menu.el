@@ -35,6 +35,13 @@
 (require 'transient)
 (require 'compile)
 
+(declare-function json-read "json")
+
+(defvar json-object-type)
+(defvar json-array-type)
+(defvar json-null)
+(defvar json-false)
+
 (defcustom pip-menu-project-markers-files '("Pipfile"
                                             "pyproject.toml"
                                             "requirements.txt"
@@ -66,13 +73,6 @@ stopping at the root directory or when a matching virtual environment is found."
   :group 'km-py
   :type '(repeat
           (string :tag "Venv directory name")))
-
-(declare-function json-read "json")
-
-(defvar json-object-type)
-(defvar json-array-type)
-(defvar json-null)
-(defvar json-false)
 
 (defcustom pip-menu-inhibit-cache nil
   "Inhibition flag for caching pip menu commands.
@@ -123,31 +123,19 @@ of the command in the menu."
                             (symbol))
                  :value-type sexp)))
 
+(defcustom pip-menu-special-commands-suffixes '(("uninstall" . pip-menu-uninstall-suffix)
+                                                ("show" . pip-menu-show-suffix))
+  "Alist of special command suffixes for `pip-menu' commands.
 
-(defun pip-menu--find-project-root (&optional directory)
-  "Locate the root DIRECTORY with `package.json'.
+A list of suffixes for special pip commands.
 
-Optional argument DIRECTORY is the directory from which to start searching for
-the project root. If not provided, `default-directory' is used."
-  (unless directory (setq directory default-directory))
-  (if-let ((found (seq-find
-                   (lambda (it)
-                     (file-exists-p (expand-file-name it directory)))
-                   pip-menu-project-markers-files)))
-      (file-name-as-directory directory)
-    (let ((parent (expand-file-name ".." directory)))
-      (unless (or (string= parent directory)
-                  (string= directory "")
-                  (string= directory "/"))
-        (pip-menu--find-project-root parent)))))
-
-(defun pip-menu--project-current-root ()
-  "Return the root directory of the current project."
-  (when-let ((project (ignore-errors (project-current))))
-    (if (fboundp 'project-root)
-        (project-root project)
-      (with-no-warnings
-        (car (project-roots project))))))
+Each element in the list is a cons cell where the car is a string
+representing the pip command, and the cdr is a symbol representing
+the interactive command to be used as the suffix for that command."
+  :group 'pip-menu
+  :type '(alist
+          :key-type string
+          :value-type function))
 
 (defconst pip-menu--command-regex
   (rx (seq bol
@@ -204,10 +192,51 @@ the project root. If not provided, `default-directory' is used."
                    (not (any " "))))))))
   "Regular expression for matching pip command-line arguments.")
 
+(defconst pip-menu-subcommand-regex
+  (rx (seq bol
+           (zero-or-more
+            (any "\t "))
+           "- "
+           (group
+            (one-or-more
+             (any "a-z" "-")))
+           ":"
+           (any "\t ")
+           (group
+            (one-or-more nonl))
+           "\n"))
+  "Regular expression matching pip menu subcommands.")
+
+
+(defun pip-menu--find-project-root (&optional directory)
+  "Locate the root DIRECTORY of a Python project by searching for marker files.
+
+Argument DIRECTORY is the directory from which to start searching for the
+project root. If not provided, `default-directory' is used."
+  (unless directory (setq directory default-directory))
+  (if-let ((found (seq-find
+                   (lambda (it)
+                     (file-exists-p (expand-file-name it directory)))
+                   pip-menu-project-markers-files)))
+      (file-name-as-directory directory)
+    (let ((parent (expand-file-name ".." directory)))
+      (unless (or (string= parent directory)
+                  (string= directory "")
+                  (string= directory "/"))
+        (pip-menu--find-project-root parent)))))
+
+(defun pip-menu--project-current-root ()
+  "Return the root directory of the current project."
+  (when-let ((project (ignore-errors (project-current))))
+    (if (fboundp 'project-root)
+        (project-root project)
+      (with-no-warnings
+        (car (project-roots project))))))
+
+
 (defvar pip-menu-version nil)
 (defvar pip-menu-cache (make-hash-table :test 'equal))
-(defvar pip-menu-commands nil)
-(defvar pip-menu-general-options nil)
+(defvar pip-menu-children nil)
 (defvar pip-menu-current-description nil)
 
 (eval-and-compile
@@ -218,20 +247,6 @@ Argument INIT-FN is the macro to be expanded."
     (if (symbolp init-fn)
         `(#',init-fn)
       `(,init-fn))))
-
-(defmacro pip-menu--parse-help-with-output (output &rest body)
-  "Parse pip help OUTPUT in a temporary buffer.
-
-Argument OUTPUT is a string containing the help output to parse.
-
-Remaining arguments BODY are forms that are evaluated with the OUTPUT inserted
-into a temporary buffer."
-  (declare (indent 1)
-           (debug t))
-  `(with-temp-buffer
-     (save-excursion
-       (insert ,output))
-     ,@body))
 
 (defmacro pip-menu--compose (&rest functions)
   "Compose FUNCTIONS into a single callable chain.
@@ -299,27 +314,33 @@ pip command."
    (pip-menu--find-project-root)))
 
 (defun pip-menu--run-compile (command &optional buff-name env)
-  "Run a compilation COMMAND using the current Node.js version.
+  "Run a compilation COMMAND with optional buffer name and environment settings.
 
-Argument COMMAND is a string representing the shell command to execute.
+Argument COMMAND is the shell command to run for compilation.
 
-Optional argument BUFF-NAME is either a string specifying the buffer name or a
-function that generates the buffer name.
+Optional argument BUFF-NAME is the name of the buffer to use for compilation
+output.
 
-Optional argument ENV is a list of environment variables to set before running
-the COMMAND; it defaults to `process-environment'."
-  (let ((compenv (or env process-environment)))
+Optional argument ENV is the environment to use during compilation."
+  (let ((compenv (or env process-environment))
+        (curr-dir (pip-menu--get-project-root)))
     (let*
         ((compilation-read-command nil)
          (compilation-environment compenv)
          (compile-command command)
+         (compilation-save-buffers-predicate
+          (lambda ()
+            (message "curr-dir %s default-directory=`%S'" curr-dir
+                     default-directory)
+            (when (and curr-dir default-directory)
+              (file-in-directory-p default-directory curr-dir))))
          (compilation-buffer-name-function
           (if (functionp buff-name)
               buff-name
             (lambda (&optional _mode)
               (or buff-name
                   (concat (pip-menu--get-project-buffer-name) "-compilation"))))))
-      (compile compile-command))))
+      (compile compile-command t))))
 
 (defun pip-menu--stringify (item)
   "Convert various data types to string representation.
@@ -412,6 +433,23 @@ Argument STR is a string containing the text to be processed."
   "Return current transient arguments."
   (pip-menu--format-args (reverse (pip-menu--get-arguments))))
 
+(defun pip-menu--format-description (description)
+  "Return DESCRIPTION with whitespace trimmed and newlines normalized.
+
+Argument DESCRIPTION is a string containing the description to format."
+  (string-trim
+   (string-join (split-string description "[\n\r\f]+" t) "\n")))
+
+(defun pip-menu--safe-format-description (description default)
+  "Return formatted DESCRIPTION if it's a string, otherwise return DEFAULT.
+
+Argument DESCRIPTION is a string containing the description to format.
+
+Argument DEFAULT is the fallback value if DESCRIPTION is not a string."
+  (if (stringp description)
+      (pip-menu--format-description description)
+    default))
+
 (transient-define-suffix pip-menu-show-args ()
   "Display formatted pip command with arguments."
   :transient t
@@ -423,6 +461,100 @@ Argument STR is a string containing the text to be processed."
      (propertize (pip-menu--make-command-name name args)
                  'face 'success))))
 
+(defun pip-menu--get-incompatible-args (plist)
+  "Return a list of incompatible arguments from the property list PLIST.
+
+Argument PLIST is a property list containing subcommands and their details."
+  (let ((res))
+    (pcase-dolist (`(,_group-name . ,cmds)
+                   (plist-get plist :subcommands))
+      (when-let ((args (mapcar 'caddr cmds)))
+        (push args
+              res)))
+    res))
+
+(defun pip-menu--map-children-group (idx children)
+  "Map and parse suffixes of CHILDREN at index IDX using a transient command.
+
+Argument IDX is the index of the group of CHILDREN to map.
+
+Argument CHILDREN is a list of child elements to be processed."
+  (mapcar
+   (apply-partially #'transient-parse-suffix
+                    (oref transient--prefix command))
+   (cdr (nth idx children))))
+
+
+(defun pip-menu--map-commands-with-options (plist &optional inhibit-eval)
+  "Map commands and options from PLIST, optionally inhibiting evaluation.
+
+Argument PLIST is a property list containing commands and options.
+
+Optional argument INHIBIT-EVAL is a boolean that, when non-nil, prevents
+evaluation of commands."
+  (let ((commands (plist-get plist :commands))
+        (options (plist-get plist :options))
+        (subcommands (plist-get plist :subcommands))
+        (results))
+    (pcase-dolist (`(,group-name . ,cmds) commands)
+      (let ((mapped-cmds
+             (mapcar
+              (pcase-lambda (`(,k ,cmd ,descr))
+                (let ((opt
+                       (list
+                        (string-join
+                         (delq nil
+                               (list cmd
+                                     descr))
+                         ": ")
+                        k))
+                      (extra-props
+                       (cdr
+                        (assoc-string
+                         cmd
+                         pip-menu-extra-command-props))))
+                  (let ((name
+                         (intern
+                          (concat "pip-menu-"
+                                  (replace-regexp-in-string
+                                   " " "-" cmd)
+                                  "-"
+                                  (when pip-menu-version
+                                    (with-temp-buffer
+                                      (save-excursion
+                                        (insert pip-menu-version))
+                                      (when (re-search-forward
+                                             "[0-9]+[.][0-9]+[.][0-9]+"
+                                             nil t 1)
+                                        (match-string-no-properties
+                                         0))))))))
+                    (unless inhibit-eval
+                      (eval `(pip-menu-define-command
+                              ,name
+                              ,cmd
+                              ,descr)
+                            t))
+                    (push name opt)
+                    name)
+                  (if extra-props
+                      (append (reverse opt) extra-props)
+                    (reverse opt))))
+              cmds)))
+        (when mapped-cmds
+          (push (cons group-name mapped-cmds) results))))
+    (setq results (if (not (and (or subcommands commands) options))
+                      (append subcommands options)
+                    (pcase-dolist (`(,k . ,items) options)
+                      (dolist (it items)
+                        (unless (string-prefix-p "-" (car it))
+                          (setcar it (concat "-" (car it)))))
+                      (when items
+                        (push (cons k items) results)))
+                    (append subcommands (reverse results))))
+    results))
+
+
+
 (defmacro pip-menu-define-command (name cmd description &rest body)
   "Define a transient command with NAME, CMD, DESCRIPTION, and BODY.
 
@@ -433,84 +565,69 @@ Argument CMD is the string representing the pip command to run.
 Argument DESCRIPTION is the string describing the command.
 
 Remaining arguments BODY are the forms to be included in the command definition."
-  (let ((sym (make-symbol "sym"))
-        (help-output (make-symbol "help-output"))
+  (let ((plist (make-symbol "plist"))
         (args (make-symbol "args"))
-        (value (make-symbol "value")))
+        (children (make-symbol "children"))
+        (incompatible (make-symbol "incompatible")))
     `(progn
-       (let ((,sym)
-             (,help-output)
+       (let ((,plist)
              (,args)
-             (,value))
+             (,children)
+             (,incompatible))
         (transient-define-prefix ,name (&optional ,args)
           ,(concat (or description cmd) ".")
           :man-page "pip"
-          [:description (lambda ()
-                          (setq ,help-output
-                           (or ,help-output
-                            (pip-menu--parse-help-with-output
-                                (pip-menu--trim-warning
-                                 (shell-command-to-string (format
-                                                           "pip help %s"
-                                                           ,cmd)))
-                              (buffer-string))))
-                          (setq ,sym (with-temp-buffer
-                                       (save-excursion
-                                         (insert ,help-output))
-                                       (pip-menu--parse-commands ,cmd)))
-                          (plist-get ,sym :usage))
-           :class transient-column
-           :setup-children
-           (lambda (&rest _argsn)
-             (mapcar
-              (apply-partially #'transient-parse-suffix
-               (oref transient--prefix command))
-              (cdr (nth 0 (plist-get ,sym :options)))))]
-          [:description (lambda ()
-                          (car (nth 1 (plist-get ,sym :options))))
-           :class transient-column
-           :setup-children
-           (lambda (&rest _argsn)
-             (mapcar
-              (apply-partially #'transient-parse-suffix
-               (oref transient--prefix command))
-              (cdr (nth 1 (plist-get ,sym :options)))))]
-          [:description (lambda ()
-                          (car (nth 2 (plist-get ,sym :options))))
-           :if (lambda ()
-                 (car (nth 2 (plist-get ,sym :options))))
-           :class transient-column
-           :setup-children
-           (lambda (&rest _argsn)
-             (mapcar
-              (apply-partially #'transient-parse-suffix
-               (oref transient--prefix command))
-              (cdr (nth 2 (plist-get ,sym :options)))))]
+          [:setup-children (lambda (&rest _argsn)
+                             (unless ,plist
+                              (setq ,plist (pip-menu--parse-help-for-command
+                                            ,cmd))
+                              (setq ,incompatible (pip-menu--get-incompatible-args
+                                                   ,plist))
+                              (setq ,children (pip-menu--map-commands-with-options
+                                               ,plist)))
+                             (append
+                              (list (pip-menu--safe-format-description
+                                     (plist-get ,plist :usage)
+                                     ,cmd))))
+           :class transient-column]
+          [,@(mapcar
+             (lambda (idx)
+               `[:if (lambda ()
+                       (nth ,idx ,children))
+                 :description (lambda ()
+                                (car (nth ,idx ,children)))
+                 :setup-children
+                 (lambda (&rest _)
+                   (pip-menu--map-children-group ,idx ,children))
+                 :class transient-column])
+             (number-sequence 0 5))]
           ,@body
-          [[("RET" "Run" (lambda ()
-                           (interactive)
-                           (pip-menu--run-compile
-                            (pip-menu--confirm-command
-                             "pip"
-                             ,cmd
-                             (pip-menu--get-formatted-transient-args))
-                            (pip-menu--get-project-buffer-name))))
-            ("C-c C-a" "Show arguments" pip-menu-show-args)]]
+          [("RET" "Run"
+            ,(if-let ((special-suffix
+                       (cdr (assoc-string cmd
+                             pip-menu-special-commands-suffixes))))
+                 special-suffix
+               `(lambda ()
+                  (interactive)
+                  (pip-menu--run-compile
+                   (pip-menu--confirm-command
+                    "pip"
+                    ,cmd
+                    (pip-menu--get-formatted-transient-args))
+                   (pip-menu--get-project-buffer-name)))))
+           ("C-c C-a" "Show arguments" pip-menu-show-args)]
           (interactive (list (pip-menu--get-arguments)))
-          (setq ,help-output
-           (or ,help-output (pip-menu--parse-help-with-output
-                                (pip-menu--trim-warning
-                                 (shell-command-to-string
-                                  (concat "pip help " ,cmd)))
-                              (buffer-string))))
-          (setq ,sym (with-temp-buffer
-                       (save-excursion
-                         (insert ,help-output))
-                       (pip-menu--parse-commands ,cmd)))
+          (unless ,plist
+           (setq ,plist (pip-menu--parse-help-for-command ,cmd))
+           (setq ,incompatible (pip-menu--get-incompatible-args
+                                ,plist))
+           (setq ,children (pip-menu--map-commands-with-options
+                            ,plist)))
           (put ',name 'transient--prefix
            (transient-prefix
             :command ',name
-            :value ,args))
+            :value ,args
+            :incompatible ,incompatible))
           (transient-setup ',name)))
        (put ',name 'pip-menu-command
         ,(concat "pip " cmd)))))
@@ -519,15 +636,52 @@ Remaining arguments BODY are the forms to be included in the command definition.
   "Remove \"WARNING:\" lines from the beginning of the string STR.
 
 Argument STR is the input string to be processed."
-  (if (string-match-p "^WARNING:" str)
-      (with-temp-buffer
-        (insert str)
-        (goto-char (point-min))
-        (while (looking-at "^WARNING:")
-          (forward-line 1))
-        (string-trim (buffer-substring-no-properties (point)
-                                                     (point-max))))
-    (string-trim str)))
+  (let ((trimmed-str (string-trim str)))
+    (if (string-match-p "^WARNING:" trimmed-str)
+        (with-temp-buffer
+          (insert str)
+          (goto-char (point-min))
+          (while (looking-at "^WARNING:")
+            (forward-line 1))
+          (string-trim (buffer-substring-no-properties (point)
+                                                       (point-max))))
+      trimmed-str)))
+
+(defun pip-menu--parse-help-for-command (cmd)
+  "Parse the help output of a pip command CMD and return structured data.
+
+Argument CMD is the command for which help information is to be parsed."
+  (with-temp-buffer
+    (let ((status (apply #'call-process "pip" nil t nil "help" (if (listp cmd)
+                                                                   cmd
+                                                                 (list cmd)))))
+      (goto-char (point-min))
+      (if (zerop status)
+          (pip-menu--parse-current-buffer cmd)
+        (message
+         "pip-menu: pip help %s exited with status %s:\n%s"
+         cmd
+         status
+         (buffer-string))
+        nil))))
+
+(defun pip-menu--exec (cmd &rest args)
+  "Execute CMD with ARGS, returning trimmed output or nil on failure.
+
+Argument CMD is the shell command to run.
+
+Remaining arguments ARGS are strings passed as command arguments to CMD."
+  (with-temp-buffer
+    (let ((status (apply #'call-process cmd nil t nil args)))
+      (if (zerop status)
+          (pip-menu--trim-warning (buffer-string))
+        (message
+         "pip-menu: A command `%s' executed with args `%s' exited with status %s:\n%s"
+         cmd
+         (mapconcat (apply-partially #'format "%s") args " ")
+         status
+         (buffer-string))
+        nil))))
 
 (defun pip-menu--json-read-buffer (&optional object-type array-type null-object
                                              false-object)
@@ -567,34 +721,186 @@ represent a JSON false value.  It defaults to `:false'."
           (json-false (or false-object :false)))
       (json-read))))
 
-(defvar pip-menu---packages nil)
 
-(defun pip-menu---packages (&optional recache)
-  "Return alist of installed pip packages, optionally recaching the result.
+(defun pip-menu--get-installed-packages ()
+  "Retrieve and parse the list of installed pip packages in JSON format."
+  (with-temp-buffer
+    (when (zerop (call-process "pip" nil (current-buffer) nil
+                               "list" "--format=json"))
+      (goto-char (point-min))
+      (when (re-search-forward "\\[" nil t 1)
+        (forward-char -1))
+      (pip-menu--json-read-buffer))))
 
-Optional argument RECACHE, when non-nil, forces the cache to be refreshed."
-  (interactive (list current-prefix-arg))
-  (and recache (setq pip-menu---packages nil))
-  (or pip-menu---packages
-      (setq pip-menu---packages
-            (with-temp-buffer
-              (call-process "pip" nil (current-buffer) nil
-                            "list" "--format=json")
-              (goto-char (point-min))
-              (when (re-search-forward "\\[" nil t 1)
-                (forward-char -1))
-              (let
-                  ((it
-                    (pip-menu--json-read-buffer)))
-                (if it
-                    (progn
-                      (seq-map
-                       #'(lambda
-                           (e)
-                           (cons
-                            (assoc-default 'name e)
-                            e))
-                       it))))))))
+(defun pip-menu--get-installed-packages-alist ()
+  "Return an alist of installed pip packages with their names and versions."
+  (mapcar (lambda (alist)
+            (cons (cdr (assq 'name alist))
+                  (cdr (assq 'version alist))))
+          (pip-menu--get-installed-packages)))
+
+(defvar pip-menu-multi-completion-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-M-j")
+                #'pip-menu-throw-done)
+    (define-key map
+                (kbd "C-<return>")
+                #'pip-menu-throw-done)
+    map)
+  "Keymap for multi-completion commands in pip menu.")
+
+(defun pip-menu-throw-done (&optional arg)
+  "Throw `done' signal with argument or true.
+
+Optional argument ARG is the value to throw with the tag `done'. If not
+provided, it defaults to t."
+  (interactive)
+  (throw 'done (or arg t)))
+
+(defun pip-menu-multi-reader (prompt completion-table &optional predicate
+                                     require-match initial-input hist def
+                                     inherit-input-method)
+  "Read multiple items from the minibuffer with completion until done.
+
+Argument PROMPT is the string to prompt with.
+
+Argument COMPLETION-TABLE is the collection to complete against.
+
+Optional argument PREDICATE is a function to filter possible completions.
+
+Optional argument REQUIRE-MATCH specifies whether the user must match an
+existing completion.
+
+Optional argument INITIAL-INPUT is the initial input in the minibuffer.
+
+Optional argument HIST is the history list to use.
+
+Optional argument DEF is the default value.
+
+Optional argument INHERIT-INPUT-METHOD specifies whether the minibuffer inherits
+the current input method."
+  (let* ((choices)
+         (curr)
+         (done)
+         (def-pred (lambda (cand)
+                     (not (member (if (listp cand)
+                                      (car cand)
+                                    cand)
+                                  choices))))
+         (predicate (if (not predicate)
+                        def-pred
+                      (lambda (cand)
+                        (and
+                         (funcall def-pred cand)
+                         (funcall predicate cand))))))
+    (setq done
+          (catch 'done
+            (while (setq curr
+                         (let ((ch
+                                (minibuffer-with-setup-hook
+                                    (lambda ()
+                                      (use-local-map
+                                       (make-composed-keymap
+                                        pip-menu-multi-completion-map
+                                        (current-local-map))))
+                                  (completing-read
+                                   (concat
+                                    (string-trim
+                                     (or prompt
+                                         "Item"))
+                                    " "
+                                    (string-trim
+                                     (if choices
+                                         (concat
+                                          "(" (string-join choices
+                                                           ", ")
+                                          ")")
+                                       ""))
+                                    " "
+                                    (substitute-command-keys
+                                     "(`\\<pip-menu-multi-completion-map>\ \\[pip-menu-throw-done]' to finish): " t t))
+                                   completion-table
+                                   predicate
+                                   require-match
+                                   initial-input
+                                   hist
+                                   def
+                                   inherit-input-method))))
+                           (cond ((or (not ch)
+                                      (when (listp ch)
+                                        (not (car ch)))
+                                      (and (stringp ch)
+                                           (string-empty-p (string-trim ch))))
+                                  (pip-menu-throw-done))
+                                 (t ch))))
+              (setq choices (append choices
+                                    (if (and curr (listp curr))
+                                        curr
+                                      (list curr)))))))
+    (if (stringp done)
+        (append choices (list done))
+      choices)))
+
+(defun pip-menu--installed-package-completion-table ()
+  "Return a completion table for installed pip packages with annotations."
+  (let* ((alist (pip-menu--get-installed-packages-alist))
+         (annotf (lambda (str)
+                   (concat " " (or (cdr (assoc str alist)) "")))))
+    (lambda (str pred action)
+      (if (eq action 'metadata)
+          `(metadata
+            (annotation-function . ,annotf))
+        (complete-with-action action alist str pred)))))
+
+
+(defun pip-menu-uninstall-suffix (&optional arg-str)
+  "Uninstall specified pip packages, optionally using formatted arguments.
+
+Optional argument ARG-STR is a string representing additional command-line
+arguments."
+  (interactive
+   (list
+    (pip-menu--get-formatted-transient-args)))
+  (let
+      ((packages
+        (unless (and arg-str
+                     (string-match-p
+                      (concat (regexp-opt '("--requirement"
+                                            "-r"))
+                              "[\s\t=]")
+                      arg-str))
+          (pip-menu-multi-reader "Package: "
+                                 (pip-menu--installed-package-completion-table)))))
+    (pip-menu--run-compile
+     (pip-menu--confirm-command
+      "pip"
+      "uninstall"
+      (if packages
+          (concat (string-trim-right arg-str) " " (string-join packages " "))
+        arg-str))
+     (pip-menu--get-project-buffer-name))))
+
+(defun pip-menu-show-suffix (&optional arg-str)
+  "Show information about specified pip packages using optional arguments.
+
+Optional argument ARG-STR is a string representing additional arguments for the
+pip command."
+  (interactive
+   (list
+    (pip-menu--get-formatted-transient-args)))
+  (let ((packages
+         (pip-menu-multi-reader "Package: "
+                                (pip-menu--installed-package-completion-table))))
+    (pip-menu--run-compile
+     (pip-menu--confirm-command
+      "pip"
+      "show"
+      (if packages
+          (concat (string-trim-right arg-str) " " (string-join packages " "))
+        arg-str))
+     (pip-menu--get-project-buffer-name))))
+
+
 
 
 
@@ -706,6 +1012,7 @@ Remaining arguments _ are ignored."
       (or prompt "Directory: "))))
    default-directory))
 
+
 (defun pip-menu--parse-options ()
   "Parse command-line options and return used keys and commands."
   (let ((commands)
@@ -723,7 +1030,7 @@ Remaining arguments _ are ignored."
         (skip-chars-forward "\s")
         (setq descr (pip-menu--arg-description-at-point))
         (unless (member argument '("--help"))
-          (when short
+          (when (and short (not (equal short "-q")))
             (push short used-keys)
             (setq arg-list (list short argument)))
           (setq short-descr (replace-regexp-in-string "^--" "" argument))
@@ -786,7 +1093,7 @@ Remaining arguments _ are ignored."
                         (pcase specifier
                           ((pred
                             (string-match-p
-                             "<\\(path\\|dir\\|directory\\)>"))
+                             "<\\(\\|dir\\|directory\\)>"))
                            (list
                             :prompt "Directory: "
                             :class 'transient-option
@@ -798,6 +1105,20 @@ Remaining arguments _ are ignored."
                                         "%s"
                                         specifier))
                                       pip-menu-read-dir-relative)))
+                          ((pred
+                            (string-match-p
+                             "<\\(path\\|file\\|filepath\\|filename\\)>"))
+                           (list
+                            :prompt "File "
+                            :class 'transient-option
+                            :reader (pip-menu--compose
+                                      (apply-partially
+                                       #'format
+                                       (replace-regexp-in-string
+                                        "<[^>]+>"
+                                        "%s"
+                                        specifier))
+                                      transient-read-file)))
                           (_ (list
                               :prompt specifier
                               :class 'transient-option
@@ -868,7 +1189,13 @@ not evaluated."
             t)
       (list descr name))))
 
-(defun pip-menu--parse-commands (&optional parent-cmd used-keys)
+(defun pip-menu--skip-empty-lines ()
+  "Skip lines that are empty or contain only whitespace characters."
+  (while (looking-at "^[\s\t]*[\n]")
+    (forward-line 1)))
+
+
+(defun pip-menu--parse-current-buffer (&optional parent-cmd used-keys)
   "Parse command groups and options from the current buffer.
 
 Optional argument PARENT-CMD is a string representing the parent command.
@@ -877,13 +1204,17 @@ Optional argument USED-KEYS is a list of keys that have already been used."
   (let ((groups)
         (options-groups)
         (usage)
+        (subcommands)
         (used-keys (append used-keys '("q" "v")))
-        (options-used-keys '("q")))
+        (options-used-keys '("q"))
+        (current-cmd (if (and parent-cmd (listp parent-cmd))
+                         (string-join parent-cmd " ")
+                       parent-cmd)))
     (let ((case-fold-search t))
       (while (re-search-forward pip-menu-argument-group-title-regex nil t 1)
         (let ((group-title (match-string-no-properties 1)))
           (forward-line 1)
-          (skip-chars-forward "\n")
+          (pip-menu--skip-empty-lines)
           (cond ((looking-at pip-menu--argument-regex)
                  (pcase-let ((`(,keys . ,options)
                               (pip-menu--parse-options)))
@@ -904,7 +1235,7 @@ Optional argument USED-KEYS is a list of keys that have already been used."
                                               (pip-menu--eval-infix
                                                (make-symbol
                                                 (concat "pip-menu-"
-                                                        parent-cmd
+                                                        current-cmd
                                                         (car def)))
                                                def)))
                                      ((listp (cadr def))
@@ -925,8 +1256,9 @@ Optional argument USED-KEYS is a list of keys that have already been used."
                        (goto-char (match-end 0))
                        (skip-chars-forward "\s")
                        (setq descr (pip-menu--arg-description-at-point))
-                       (push (list short long descr)
-                             commands)))
+                       (unless (equal long "help")
+                         (push (list short long descr)
+                               commands))))
                    (setq commands (nreverse commands))
                    (let ((non-alised-cmds (seq-filter
                                            (pip-menu--compose not car)
@@ -943,6 +1275,35 @@ Optional argument USED-KEYS is a list of keys that have already been used."
                         def)
                       used-keys))
                    (push (cons group-title commands) groups)))
+                ((looking-at pip-menu-subcommand-regex)
+                 (let ((commands))
+                   (while (looking-at pip-menu-subcommand-regex)
+                     (let ((long (match-string-no-properties 1))
+                           (descr (match-string-no-properties 2)))
+                       (skip-chars-forward "\s")
+                       (push (list nil long descr)
+                             commands)
+                       (forward-line 1)))
+                   (setq commands (nreverse commands))
+                   (let ((res (pip-menu--generate-shortcuts
+                               commands
+                               (pcase-lambda
+                                 (`(,_alias ,cmd
+                                    . _))
+                                 cmd)
+                               (lambda (key def)
+                                 (push key used-keys)
+                                 (let ((descr (caddr def))
+                                       (arg (string-join (delq
+                                                          nil
+                                                          (list
+                                                           current-cmd
+                                                           (cadr def)))
+                                                         " ")))
+                                   (list key (format "%s: %s" arg descr)
+                                         (cadr def))))
+                               used-keys)))
+                     (push (cons group-title res) subcommands))))
                 (t
                  (let ((end (or (save-excursion
                                   (when (re-search-forward
@@ -961,6 +1322,7 @@ Optional argument USED-KEYS is a list of keys that have already been used."
       (list
        :usage usage
        :commands groups
+       :subcommands subcommands
        :options options-groups))))
 
 (defun pip-menu--key-splitted-variants (word len separator)
@@ -1332,6 +1694,7 @@ generated keys."
   "Define a transient prefix for managing Python virtual environments."
   ["Virtual Envs"
    ("d" pip-menu-pyvenv-deactivate)
+   ("d" "Show the cache directory." "cache dir")
    ("a" "Activate a virtual env by directory" pyvenv-activate)
    ("w" "Activate a virtualenvwrapper env" pyvenv-workon)
    ("c" "Create a virtual env" pyvenv-create)
@@ -1354,151 +1717,59 @@ generated keys."
                     (if (bound-and-true-p pyvenv-mode)
                         "X"
                       " ")
-                    "]")))])
+                    "]")))]
+  [("l" "Pip menu" pip-menu)])
+
 
 (defun pip-menu--setup ()
   "Initialize and cache PIP commands and their descriptions."
   (setq pip-menu-version (pip-menu--version))
-  (setq pip-menu-commands (unless pip-menu-inhibit-cache
+  (setq pip-menu-children (unless pip-menu-inhibit-cache
                             (gethash pip-menu-version
                                      pip-menu-cache)))
-  (unless pip-menu-commands
-    (setq pip-menu-commands
-          (with-temp-buffer
-            (let ((status (call-process "pip"  nil t nil "help")))
-              (when (zerop status)
-                (goto-char (point-min))
-                (let* ((pl (pip-menu--parse-commands))
-                       (groups (plist-get pl :commands))
-                       (options (plist-get pl :options))
-                       (usage (plist-get pl :usage)))
-                  (setq pip-menu-current-description usage)
-                  (setq pip-menu-general-options options)
-                  (let ((results))
-                    (pcase-dolist (`(,group-name . ,cmds) groups)
-                      (let ((mapped-cmds
-                             (mapcar
-                              (pcase-lambda (`(,k ,cmd ,descr))
-                                (let
-                                    ((opt
+  (unless pip-menu-children
+    (let* ((pl (pip-menu--parse-help-for-command nil))
+           (children (pip-menu--map-commands-with-options pl))
+           (usage (plist-get pl :usage)))
+      (setq pip-menu-current-description usage)
+      (setq pip-menu-children (append children
                                       (list
-                                       (string-join
-                                        (delq nil
-                                              (list cmd
-                                                    descr))
-                                        ": ")
-                                       k))
-                                     (extra-props
-                                      (cdr
-                                       (assoc-string
-                                        cmd
-                                        pip-menu-extra-command-props))))
-                                  (let ((name
-                                         (intern
-                                          (concat "pip-menu-"
-                                                  (replace-regexp-in-string
-                                                   " " "-" cmd)
-                                                  "-"
-                                                  (when pip-menu-version
-                                                    (with-temp-buffer
-                                                      (save-excursion (insert pip-menu-version))
-                                                      (when (re-search-forward "[0-9]+[.][0-9]+[.][0-9]+" nil t 1)
-                                                        (match-string-no-properties 0))))))))
-                                    (eval `(pip-menu-define-command
-                                            ,name
-                                            ,cmd
-                                            ,descr)
-                                          t)
-                                    (push name opt)
-                                    name)
-                                  (if extra-props
-                                      (append (reverse opt) extra-props)
-                                    (reverse opt))))
-                              cmds)))
-                        (when mapped-cmds
-                          (push (cons group-name mapped-cmds) results))))
-                    (pcase-dolist (`(,k . ,items) pip-menu-general-options)
-                      (dolist (it items)
-                        (unless (string-prefix-p "-" (car it))
-                          (setcar it (concat "-" (car it)))))
-                      (push (cons k items) results))
-                    (push (cons "Virtual Env" (list '("v" "Manage virtual venv" pip-menu-pyvenv))) results)
-                    (nreverse results))))))))
-  (puthash pip-menu-version pip-menu-commands pip-menu-cache))
+                                       (cons "Virtual Env"
+                                             (list '("v" "Manage virtual venv"
+                                                     pip-menu-pyvenv))))))))
+  (puthash pip-menu-version pip-menu-children pip-menu-cache))
 
 ;;;###autoload (autoload 'pip-menu "pip-menu" nil t)
 (transient-define-prefix pip-menu ()
   "Manage dependencies with pip."
   :man-page "pip"
-  [[:description (lambda ()
-                   (if pip-menu-version
-                       (string-trim
-                        pip-menu-version)
-                     ""))
-    :class transient-column
-    :if (lambda ()
-          (cdr (nth 0 pip-menu-commands)))
-    :setup-children
-    (lambda (&rest _argsn)
-      (mapcar
-       (apply-partially #'transient-parse-suffix
-                        (oref transient--prefix command))
-       (cdr (nth 0 pip-menu-commands))))]
-   [:description (lambda ()
-                   (car (nth 1 pip-menu-commands)))
-    :class transient-column
-    :if (lambda ()
-          (cdr (nth 1 pip-menu-commands)))
-    :setup-children
-    (lambda (&rest _argsn)
-      (mapcar
-       (apply-partially #'transient-parse-suffix
-                        (oref transient--prefix command))
-       (cdr (nth 1 pip-menu-commands))))]]
-  [:description (lambda ()
-                  (car (nth 2 pip-menu-commands)))
-   :class transient-column
-   :if (lambda ()
-         (cdr (nth 2 pip-menu-commands)))
-   :setup-children
-   (lambda (&rest _argsn)
-     (mapcar
-      (apply-partially #'transient-parse-suffix
-                       (oref transient--prefix command))
-      (cdr (nth 2 pip-menu-commands))))]
-  [:description (lambda ()
-                  (car (nth 3 pip-menu-commands)))
-   :class transient-column
-   :if (lambda ()
-         (cdr (nth 3 pip-menu-commands)))
-   :setup-children
-   (lambda (&rest _argsn)
-     (mapcar
-      (apply-partially #'transient-parse-suffix
-                       (oref transient--prefix command))
-      (cdr (nth 3 pip-menu-commands))))]
-  [:description (lambda ()
-                  (car (nth 4 pip-menu-commands)))
-   :class transient-column
-   :if (lambda ()
-         (cdr (nth 4 pip-menu-commands)))
-   :setup-children
-   (lambda (&rest _argsn)
-     (mapcar
-      (apply-partially #'transient-parse-suffix
-                       (oref transient--prefix command))
-      (cdr (nth 4 pip-menu-commands))))]
-  [:description (lambda ()
-                  (car (nth 5 pip-menu-commands)))
-   :class transient-column
-   :if (lambda ()
-         (cdr (nth 5 pip-menu-commands)))
-   :setup-children
-   (lambda (&rest _argsn)
-     (mapcar
-      (apply-partially #'transient-parse-suffix
-                       (oref transient--prefix command))
-      (cdr (nth 5 pip-menu-commands))))]
+  [[:if (lambda () (cdr (nth 0 pip-menu-children)))
+    :setup-children (lambda (&rest _argsn)
+                      (append
+                       (list (replace-regexp-in-string "[\s]from[\s]" " " (string-trim pip-menu-version)))
+                                       (list (car (nth 0 pip-menu-children)))
+                                       (pip-menu--map-children-group 0 pip-menu-children)))
+    :class transient-column]
+   [:if (lambda () (cdr (nth 1 pip-menu-children)))
+    :description (lambda () (car (nth 1 pip-menu-children)))
+    :setup-children (lambda (&rest _argsn) (pip-menu--map-children-group 1 pip-menu-children))
+    :class transient-column]]
+   [:if (lambda () (cdr (nth 2 pip-menu-children)))
+    :description (lambda () (car (nth 2 pip-menu-children)))
+    :setup-children (lambda (&rest _argsn) (pip-menu--map-children-group 2 pip-menu-children))
+    :class transient-column]
+   [:if (lambda () (cdr (nth 3 pip-menu-children)))
+    :description (lambda () (car (nth 3 pip-menu-children)))
+    :setup-children (lambda (&rest _argsn) (pip-menu--map-children-group 3 pip-menu-children))
+    :class transient-column]
+   [:if (lambda () (cdr (nth 4 pip-menu-children)))
+    :description (lambda () (car (nth 4 pip-menu-children)))
+    :setup-children (lambda (&rest _argsn) (pip-menu--map-children-group 4 pip-menu-children))
+    :class transient-column]
+   [:if (lambda () (cdr (nth 5 pip-menu-children)))
+    :description (lambda () (car (nth 5 pip-menu-children)))
+    :setup-children (lambda (&rest _argsn) (pip-menu--map-children-group 5 pip-menu-children))
+    :class transient-column]
   (interactive)
   (pip-menu--setup)
   (transient-setup #'pip-menu))
