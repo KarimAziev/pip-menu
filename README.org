@@ -13,7 +13,9 @@
 - [[#installation][Installation]]
   - [[#with-use-package-and-straightel][With use-package and straight.el]]
   - [[#manual-installation][Manual installation]]
-  - [[#usage][Usage]]
+- [[#usage][Usage]]
+  - [[#pip-menu][=pip-menu=]]
+  - [[#pip-menu-pyvenv][=pip-menu-pyvenv=]]
 #+END_QUOTE
 
 * Requirements
@@ -24,7 +26,6 @@
 | ~transient~ |   0.7.2 |
 | ~pyvenv~    |    1.21 |
 | ~project~   |  0.11.1 |
-
 
 * Installation
 
@@ -54,38 +55,20 @@ Add the downloaded directory to the load path:
 (require 'pip-menu)
 #+end_src
 
-** Usage
+* Usage
 
-*** =pip-menu=
+** =pip-menu=
+=pip-menu= is the main entry command for managing Python packages using =pip=. The menu provides several =pip= commands like =install=, =uninstall=, =show=, etc.
 
-=pip-menu= is the main entry command for managing Python packages using =pip=.
+Select commands or options using the corresponding transient keys. Execute a command by selecting it and pressing =RET=.
 
-1. *Invoke =pip-menu=:*
+Commands that involve reading the installed packages (e.g., =pip uninstall= or =pip show=) will prompt you about the packages after executing the commands (after pressing =RET=). Multiple packages can be chosen.
 
-   - =M-x pip-menu=
-
-2. *Menu Options:*
-
-   - The menu provides several =pip= commands like =install=, =uninstall=, =show=, etc.
-   - Select commands or options using the corresponding transient keys.
-   - Execute a command by selecting it and pressing =RET=.
-
-   Commands that involve reading the installed packages (e.g., =pip uninstall= or =pip show=) will prompt you about the packages after executing commands (after pressing =RET=). Multiple packages can be chosen. To stop selecting packages and confirm your choice, invoke =pip-menu-throw-done=, which is by default bound to =C-M-j= and =C-<return>=. You can change the binding by customizing the =pip-menu-multi-completion-map= keymap, e.g.:
+To stop selecting packages and confirm your choice, invoke =pip-menu-throw-done=, which is by default bound to =C-M-j= and =C-<return>=. You can change the binding by customizing the =pip-menu-multi-completion-map= keymap, e.g.:
 
 #+begin_src elisp
 (define-key pip-menu-multi-completion-map (kbd "C-SPC") #'pip-menu-throw-done)
 #+end_src
 
-
-*** =pip-menu-pyvenv=
-
-=pip-menu-pyvenv= is the entry command for managing Python virtual environments using =pyvenv=.
-
-1. *Invoke =pip-menu-pyvenv=:*
-
-   - =M-x pip-menu-pyvenv=
-
-2. *Menu Options:*
-
-   - The menu provides options to activate, deactivate, and create virtual environments.
-   - Additionally, you can toggle =pyvenv-mode= and =pyvenv-tracking-mode=.
+** =pip-menu-pyvenv=
+=pip-menu-pyvenv= is another entry command for managing Python virtual environments using =pyvenv=. The menu provides options to activate, deactivate, and create virtual environments. Additionally, you can toggle =pyvenv-mode= and =pyvenv-tracking-mode=.
