@@ -4,7 +4,7 @@
 
 =pip-menu= is an Emacs package that provides a transient menu interface for managing Python packages using =pip=. The package also integrates with =pyvenv= to activate, deactivate, and manage virtual environments.
 
-[[./pip-menu.gif]]
+[[./pip-menu-demo.gif]]
 
 * Table of Contents                                       :TOC_2_gh:QUOTE:
 #+BEGIN_QUOTE
