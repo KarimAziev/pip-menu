@@ -575,7 +575,6 @@ evaluation of commands."
     results))
 
 
-
 (defmacro pip-menu-define-command (name cmd description &rest body)
   "Define a transient command with NAME, CMD, DESCRIPTION, and BODY.
 
@@ -598,30 +597,47 @@ Remaining arguments BODY are the forms to be included in the command definition.
         (transient-define-prefix ,name (&optional ,args)
           ,(concat (or description cmd) ".")
           :man-page "pip"
-          [:setup-children (lambda (&rest _argsn)
-                             (unless ,plist
-                              (setq ,plist (pip-menu--parse-help-for-command
-                                            ,cmd))
-                              (setq ,incompatible (pip-menu--get-incompatible-args
-                                                   ,plist))
-                              (setq ,children (pip-menu--map-commands-with-options
-                                               ,plist)))
+          [:description (lambda ()
+                          (pip-menu--format-menu-heading
+                           ,(concat "pip " cmd)
+                           "Press C-h C-h to display usage "))
+           :setup-children (lambda (&rest _argsn)
                              (append
-                              (list (pip-menu--safe-format-description
-                                     (plist-get ,plist :usage)
-                                     ,cmd))))
+                              (list "")))
            :class transient-column]
           [,@(mapcar
-             (lambda (idx)
-               `[:if (lambda ()
-                       (nth ,idx ,children))
-                 :description (lambda ()
-                                (car (nth ,idx ,children)))
-                 :setup-children
-                 (lambda (&rest _)
-                   (pip-menu--map-children-group ,idx ,children))
-                 :class transient-column])
-             (number-sequence 0 5))]
+              (lambda (idx)
+                `[:if (lambda ()
+                        (nth ,idx ,children))
+                  :description (lambda ()
+                                 (car (nth ,idx ,children)))
+                  :setup-children
+                  (lambda (&rest _)
+                    (pip-menu--map-children-group ,idx ,children))
+                  :class transient-column])
+              (list 0 2))]
+          [,@(mapcar
+              (lambda (idx)
+                `[:if (lambda ()
+                        (nth ,idx ,children))
+                  :description (lambda ()
+                                 (car (nth ,idx ,children)))
+                  :setup-children
+                  (lambda (&rest _)
+                    (pip-menu--map-children-group ,idx ,children))
+                  :class transient-column])
+              (list 1 3))]
+          [,@(mapcar
+              (lambda (idx)
+                `[:if (lambda ()
+                        (nth ,idx ,children))
+                  :description (lambda ()
+                                 (car (nth ,idx ,children)))
+                  :setup-children
+                  (lambda (&rest _)
+                    (pip-menu--map-children-group ,idx ,children))
+                  :class transient-column])
+              (number-sequence 4 8))]
           ,@body
           [("RET" "Run"
             ,(if-let ((special-suffix
@@ -646,6 +662,12 @@ Remaining arguments BODY are the forms to be included in the command definition.
                             ,plist)))
           (put ',name 'transient--prefix
            (transient-prefix
+            :show-help (lambda (&rest _)
+                         (interactive)
+                         (if-let ((usage (plist-get ,plist :usage)))
+                             (pip-menu--show-help (propertize usage 'face
+                                                   'font-lock-doc-face))
+                           (transient--show-manpage "pip" ,cmd)))
             :command ',name
             :value ,args
             :incompatible ,incompatible))
@@ -958,16 +980,43 @@ Argument DESCRIPTION is a string containing the choices separated by |."
                                                            (point)))
                          "|" t)))))
 
-(defun pip-menu--show-help (arg description &optional short specifier)
-  "Display a help buffer with ARG, DESCRIPTION, and optional SHORT and SPECIFIER.
+(defun pip-menu--make-argument-help-description (arg description &optional short
+                                                specifier)
+  "Create a formatted help DESCRIPTION for an argument with optional details.
 
-Argument ARG is the main string to be displayed in the help buffer.
+Argument ARG is the argument name to be described.
 
-Argument DESCRIPTION is the detailed text to be shown in the help buffer.
+Argument DESCRIPTION is the detailed description of the argument.
 
-Optional argument SHORT is an additional short DESCRIPTION to be displayed.
+Optional argument SHORT is a short form or alias for the argument.
 
-Optional argument SPECIFIER is an extra string to be shown in the help buffer."
+Optional argument SPECIFIER is an additional specifier for the argument."
+  (with-temp-buffer
+    (save-excursion
+      (insert (propertize (substring-no-properties arg) 'face
+                          'font-lock-keyword-face))
+      (when short
+        (insert ", "
+                (propertize (substring-no-properties short)
+                            'face
+                            'font-lock-keyword-face)))
+      (when specifier
+        (insert " " (propertize
+                     (or (substring-no-properties specifier)
+                         "")
+                     'face
+                     'font-lock-type-face)))
+      (insert "\n")
+      (when description
+        (let ((pos (point)))
+          (insert description)
+          (fill-region-as-paragraph pos (point)))))
+    (buffer-string)))
+
+(defun pip-menu--show-help (description)
+  "Display DESCRIPTION in a temporary buffer at the bottom of the window.
+
+Argument DESCRIPTION is the help text to be displayed in the buffer."
   (let* ((buffer (get-buffer-create
                   "*pip-menu-help*"))
          (orign-wnd (selected-window)))
@@ -1002,23 +1051,7 @@ Optional argument SPECIFIER is an extra string to be shown in the help buffer."
                    (make-composed-keymap
                     map
                     (current-local-map))))
-                (save-excursion
-                  (insert (propertize (substring-no-properties arg) 'face
-                                      'font-lock-keyword-face))
-                  (when short
-                    (insert ", "
-                            (propertize (substring-no-properties short) 'face
-                                        'font-lock-keyword-face)))
-                  (when specifier
-                    (insert " " (propertize
-                                 (or (substring-no-properties specifier) "")
-                                 'face
-                                 'font-lock-type-face)))
-                  (insert "\n")
-                  (when description
-                    (let ((pos (point)))
-                      (insert description)
-                      (fill-region-as-paragraph pos (point)))))))
+                (insert description)))
             (select-window window))))))
 
 (defun pip-menu-read-dir-relative (&optional prompt &rest _)
@@ -1079,11 +1112,12 @@ Remaining arguments _ are ignored."
                               :show-help (lambda (&rest _)
                                            (interactive)
                                            (pip-menu--show-help
-                                            ,(string-trim
-                                              argument)
-                                            ,descr
-                                            ,short
-                                            ,specifier)))))
+                                            (pip-menu--make-argument-help-description
+                                             ,(string-trim
+                                               argument)
+                                             ,descr
+                                             ,short
+                                             ,specifier))))))
                    (push
                     (append (list (car choices))
                             pl)
@@ -1100,11 +1134,12 @@ Remaining arguments _ are ignored."
                               :show-help (lambda (&rest _)
                                            (interactive)
                                            (pip-menu--show-help
-                                            ,(string-trim
-                                              argument)
-                                            ,descr
-                                            ,short
-                                            ,specifier)))))
+                                            (pip-menu--make-argument-help-description
+                                             ,(string-trim
+                                               argument)
+                                             ,descr
+                                             ,short
+                                             ,specifier))))))
                    (push
                     (append (list (car choices))
                             pl)
@@ -1157,9 +1192,10 @@ Remaining arguments _ are ignored."
                                        (lambda (&rest _)
                                          (interactive)
                                          (pip-menu--show-help
-                                          (string-trim argument) descr
-                                          short
-                                          specifier))))
+                                          (pip-menu--make-argument-help-description
+                                           (string-trim argument) descr
+                                           short
+                                           specifier)))))
                    (push (append (list short-descr argument)
                                  pl)
                          commands)))
@@ -1168,11 +1204,12 @@ Remaining arguments _ are ignored."
                              :show-help (lambda (&rest _)
                                           (interactive)
                                           (pip-menu--show-help
-                                           (string-trim
-                                            argument)
-                                           descr
-                                           short
-                                           specifier)))
+                                           (pip-menu--make-argument-help-description
+                                            (string-trim
+                                             argument)
+                                            descr
+                                            short
+                                            specifier))))
                        commands))))))
     (cons used-keys (nreverse commands))))
 
@@ -1732,7 +1769,6 @@ generated keys."
   "Define a transient prefix for managing Python virtual environments."
   ["Virtual Envs"
    ("d" pip-menu-pyvenv-deactivate)
-   ("d" "Show the cache directory." "cache dir")
    ("a" "Activate a virtual env by directory" pyvenv-activate)
    ("w" "Activate a virtualenvwrapper env" pyvenv-workon)
    ("c" "Create a virtual env" pyvenv-create)
@@ -1777,37 +1813,75 @@ generated keys."
                                                      pip-menu-pyvenv))))))))
   (puthash pip-menu-version pip-menu-children pip-menu-cache))
 
+(defun pip-menu--pip-version-to-description ()
+  "Extract and format version information from `pip-menu-version' for display."
+  (let ((parts)
+        (title))
+    (with-temp-buffer (insert (or pip-menu-version "No pip found"))
+                      (when (looking-back ")" 0)
+                        (when (re-search-backward "(" nil t 1)
+                          (push (buffer-substring-no-properties (point)
+                                                                (point-max))
+                                parts))
+                        (skip-chars-backward "\s\t\n")
+                        (let ((end (point)))
+                          (when (re-search-backward "[\s]from[\s]" nil t 1)
+                            (push (buffer-substring-no-properties (match-end 0)
+                                                                  end)
+                                  parts)))
+                        (unless (= (point)
+                                   (point-min))
+                          (setq title (buffer-substring-no-properties (point-min)
+                                                                      (point))))))
+    (pip-menu--format-menu-heading title
+                                   (when parts (string-join parts "\n")))))
+
+(defun pip-menu--format-menu-heading (title &optional note)
+  "Format TITLE as a menu heading.
+When NOTE is non-nil, append it the next line."
+  (format "%s%s%s"
+          (propertize title 'face `(:inherit transient-heading)
+                      'display '((height 1.1)))
+          (propertize " " 'face `(:inherit transient-heading)
+                      'display '(space :align-to right))
+          (propertize (if note (concat "\n" note) "") 'face
+                      'font-lock-doc-face)))
+
 ;;;###autoload (autoload 'pip-menu "pip-menu" nil t)
 (transient-define-prefix pip-menu ()
   "Manage dependencies with pip."
   :man-page "pip"
-  [[:if (lambda () (cdr (nth 0 pip-menu-children)))
-    :setup-children (lambda (&rest _argsn)
-                      (append
-                       (list (replace-regexp-in-string "[\s]from[\s]" " " (string-trim pip-menu-version)))
-                                       (list (car (nth 0 pip-menu-children)))
-                                       (pip-menu--map-children-group 0 pip-menu-children)))
+  [:description (lambda ()
+                  (pip-menu--pip-version-to-description))
+   [:if (lambda ()
+          (cdr (nth 0 pip-menu-children)))
+    :setup-children
+    (lambda (&rest _argsn)
+      (append
+       (list (car (nth 0 pip-menu-children)))
+       (pip-menu--map-children-group 0
+                                     pip-menu-children)))
     :class transient-column]
    [:if (lambda () (cdr (nth 1 pip-menu-children)))
     :description (lambda () (car (nth 1 pip-menu-children)))
     :setup-children (lambda (&rest _argsn) (pip-menu--map-children-group 1 pip-menu-children))
     :class transient-column]]
-   [:if (lambda () (cdr (nth 2 pip-menu-children)))
-    :description (lambda () (car (nth 2 pip-menu-children)))
-    :setup-children (lambda (&rest _argsn) (pip-menu--map-children-group 2 pip-menu-children))
-    :class transient-column]
-   [:if (lambda () (cdr (nth 3 pip-menu-children)))
-    :description (lambda () (car (nth 3 pip-menu-children)))
-    :setup-children (lambda (&rest _argsn) (pip-menu--map-children-group 3 pip-menu-children))
-    :class transient-column]
-   [:if (lambda () (cdr (nth 4 pip-menu-children)))
-    :description (lambda () (car (nth 4 pip-menu-children)))
-    :setup-children (lambda (&rest _argsn) (pip-menu--map-children-group 4 pip-menu-children))
-    :class transient-column]
-   [:if (lambda () (cdr (nth 5 pip-menu-children)))
-    :description (lambda () (car (nth 5 pip-menu-children)))
-    :setup-children (lambda (&rest _argsn) (pip-menu--map-children-group 5 pip-menu-children))
-    :class transient-column]
+  [:if (lambda () (cdr (nth 2 pip-menu-children)))
+   :description (lambda () (car (nth 2 pip-menu-children)))
+   :setup-children (lambda (&rest _argsn) (pip-menu--map-children-group 2 pip-menu-children))
+   :class transient-column]
+  [:if (lambda () (cdr (nth 3 pip-menu-children)))
+   :description (lambda () (car (nth 3 pip-menu-children)))
+   :setup-children (lambda (&rest _argsn) (pip-menu--map-children-group 3 pip-menu-children))
+   :class transient-column]
+  [:if (lambda () (cdr (nth 4 pip-menu-children)))
+   :description (lambda () (car (nth 4 pip-menu-children)))
+   :setup-children (lambda (&rest _argsn) (pip-menu--map-children-group 4 pip-menu-children))
+   :class transient-column]
+  [:if (lambda () (cdr (nth 5 pip-menu-children)))
+   :description (lambda () (car (nth 5 pip-menu-children)))
+   :setup-children (lambda (&rest _argsn) (pip-menu--map-children-group 5 pip-menu-children))
+   :class transient-column]
   (interactive)
   (pip-menu--setup)
   (transient-setup #'pip-menu))
