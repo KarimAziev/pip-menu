@@ -6,7 +6,7 @@
 ;; URL: https://github.com/KarimAziev/pip-menu
 ;; Version: 0.1.0
 ;; Keywords: languages
-;; Package-Requires: ((emacs "27.1") (transient "0.7.2") (pyvenv "1.21") (project "0.11.1"))
+;; Package-Requires: ((emacs "28.1") (transient "0.7.3") (pyvenv "1.21") (project "0.11.1"))
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;; This file is NOT part of GNU Emacs.
@@ -237,7 +237,7 @@ the interactive command to be used as the suffix for that command."
 Argument DIRECTORY is the directory from which to start searching for the
 project root. If not provided, `default-directory' is used."
   (unless directory (setq directory default-directory))
-  (if-let ((found (seq-find
+  (if-let* ((found (seq-find
                    (lambda (it)
                      (file-exists-p (expand-file-name it directory)))
                    pip-menu-project-markers-files)))
@@ -250,7 +250,7 @@ project root. If not provided, `default-directory' is used."
 
 (defun pip-menu--project-current-root ()
   "Return the root directory of the current project."
-  (when-let ((project (ignore-errors (project-current))))
+  (when-let* ((project (ignore-errors (project-current))))
     (if (fboundp 'project-root)
         (project-root project)
       (with-no-warnings
@@ -327,7 +327,7 @@ pip command."
 
 (defun pip-menu--get-project-buffer-name ()
   "Generate a buffer name for an pip project."
-  (when-let ((name (pip-menu--get-project-root)))
+  (when-let* ((name (pip-menu--get-project-root)))
     (format "pip<%s>" (replace-regexp-in-string "^~/\\|/$" "" name))))
 
 (defun pip-menu--get-project-root ()
@@ -347,20 +347,21 @@ output.
 Optional argument ENV is the environment to use during compilation."
   (let ((compenv (or env process-environment))
         (curr-dir (pip-menu--get-project-root)))
-    (let*
-        ((compilation-read-command nil)
-         (compilation-environment compenv)
-         (compile-command command)
-         (compilation-save-buffers-predicate
-          (lambda ()
-            (when (and curr-dir default-directory)
-              (file-in-directory-p default-directory curr-dir))))
-         (compilation-buffer-name-function
-          (if (functionp buff-name)
-              buff-name
-            (lambda (&optional _mode)
-              (or buff-name
-                  (concat (pip-menu--get-project-buffer-name) "-compilation"))))))
+    (let* ((compilation-read-command nil)
+           (compilation-environment compenv)
+           (compile-command command)
+           (compilation-save-buffers-predicate
+            (lambda ()
+              (when (and curr-dir default-directory)
+                (file-in-directory-p default-directory curr-dir))))
+           (compilation-buffer-name-function
+            (if (functionp buff-name)
+                buff-name
+              (lambda (&optional _mode)
+                (or buff-name
+                    (concat (or (pip-menu--get-project-buffer-name)
+                                (abbreviate-file-name default-directory))
+                            "-compilation"))))))
       (compile compile-command t))))
 
 (defun pip-menu--stringify (item)
@@ -489,7 +490,7 @@ Argument PLIST is a property list containing subcommands and their details."
   (let ((res))
     (pcase-dolist (`(,_group-name . ,cmds)
                    (plist-get plist :subcommands))
-      (when-let ((args (mapcar #'caddr cmds)))
+      (when-let* ((args (mapcar #'caddr cmds)))
         (push args
               res)))
     res))
@@ -640,7 +641,7 @@ Remaining arguments BODY are the forms to be included in the command definition.
               (number-sequence 4 8))]
           ,@body
           [("RET" "Run"
-            ,(if-let ((special-suffix
+            ,(if-let* ((special-suffix
                        (cdr (assoc-string cmd
                              pip-menu-special-commands-suffixes))))
                  special-suffix
@@ -664,7 +665,7 @@ Remaining arguments BODY are the forms to be included in the command definition.
            (transient-prefix
             :show-help (lambda (&rest _)
                          (interactive)
-                         (if-let ((usage (plist-get ,plist :usage)))
+                         (if-let* ((usage (plist-get ,plist :usage)))
                              (pip-menu--show-help (propertize usage 'face
                                                    'font-lock-doc-face))
                            (transient--show-manpage "pip" ,cmd)))
@@ -1690,17 +1691,18 @@ generated keys."
 
 (defun pip-menu--version ()
   "Return the version of pip by calling the \"pip --version\" command."
-  (with-temp-buffer
-    (let ((status (call-process "pip"  nil t nil "--version")))
-      (when (zerop status)
-        (mapconcat
-         (lambda (it)
-           (if (and (file-name-absolute-p it)
-                    (file-exists-p it))
-               (abbreviate-file-name it)
-             it))
-         (split-string (string-trim (buffer-string)) "\s")
-         " ")))))
+  (let ((pip (executable-find "pip")))
+    (with-temp-buffer
+      (let ((status (call-process pip  nil t nil "--version")))
+        (when (zerop status)
+          (mapconcat
+           (lambda (it)
+             (if (and (file-name-absolute-p it)
+                      (file-exists-p it))
+                 (abbreviate-file-name it)
+               it))
+           (split-string (string-trim (buffer-string)) "\s")
+           " "))))))
 
 (defun pip-menu--find-venv-path ()
   "Find the nearest virtual environment directory from the current path."
@@ -1709,7 +1711,7 @@ generated keys."
     (while (and
             (not found)
             (not (string= "/" directory)))
-      (setq found (when-let ((name (seq-find
+      (setq found (when-let* ((name (seq-find
                                     (lambda (venv-name)
                                       (let ((venv-path
                                              (expand-file-name
