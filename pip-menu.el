@@ -1694,15 +1694,17 @@ generated keys."
   (let ((pip (executable-find "pip")))
     (with-temp-buffer
       (let ((status (call-process pip  nil t nil "--version")))
-        (when (zerop status)
-          (mapconcat
-           (lambda (it)
-             (if (and (file-name-absolute-p it)
-                      (file-exists-p it))
-                 (abbreviate-file-name it)
-               it))
-           (split-string (string-trim (buffer-string)) "\s")
-           " "))))))
+        (if (zerop status)
+            (mapconcat
+             (lambda (it)
+               (if (and (file-name-absolute-p it)
+                        (file-exists-p it))
+                   (abbreviate-file-name it)
+                 it))
+             (split-string (string-trim (buffer-string)) "\s")
+             " ")
+          (message (buffer-string))
+          nil)))))
 
 (defun pip-menu--find-venv-path ()
   "Find the nearest virtual environment directory from the current path."
